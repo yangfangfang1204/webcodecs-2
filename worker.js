@@ -1,4 +1,4 @@
-importScripts("demuxer_mp4.js", "renderer_2d.js");
+importScripts("demuxer_mp4.js", "renderer_webgl.js", "renderer_2d.js");
 
 // Status UI. Messages are batched per animation frame.
 let pendingStatus = null;
@@ -22,6 +22,8 @@ let renderer = null;
 let pendingFrame = null;
 let startTime = null;
 let frameCount = 0;
+let videoEncoder = null;
+frameCounter = 0;
 
 function renderFrame(frame) {
   if (!pendingFrame) {
@@ -37,6 +39,39 @@ function renderFrame(frame) {
 
 function renderAnimationFrame() {
   renderer.draw(pendingFrame);
+  //init videoEncoder
+  if (videoEncoder == null) {
+    const initParam = {
+      output: (frame, meta) => {
+        //h264/vp9 raw data , muxer...
+        let frameData = new Uint8Array(frame.byteLength);
+        frame.copyTo(frameData);
+        console.log("get frameData");
+      },
+      error: () => {
+        console.log("encoder error");
+      }
+    }
+    videoEncoder = new VideoEncoder(initParam);
+    videoEncoder.configure({
+      codec: "vp09.00.10.08",
+      width: 1920,
+      height: 1080,
+      bitrate: 10e6,
+    });
+  }
+  //inputdata to videoEncoder
+  // let pixelData = renderer.getRGBAData();//copy rgba data from webgl
+  let pixelData = renderer.getWebGLTexture(); //get webgltexture
+  const videoFrame = new VideoFrame(pixelData.data, {
+    timestamp: performance.now() * 1000,
+    codedWidth: pixelData.width,
+    codedHeight: pixelData.height,
+    format: 'RGBA'
+  });
+  const insert_keyframe = (frameCounter % 50) === 0;
+  videoEncoder.encode(videoFrame, { keyFrame: insert_keyframe });
+  videoFrame.close();
   pendingFrame = null;
 }
 
@@ -47,6 +82,9 @@ function start({ dataUri, rendererName, canvas }) {
     case "2d":
       renderer = new Canvas2DRenderer(canvas);
       break;
+    case "webgl":
+      renderer = new WebGLRenderer(rendererName, canvas);
+      break;
   }
 
   // Set up a VideoDecoer.
@@ -56,22 +94,6 @@ function start({ dataUri, rendererName, canvas }) {
       let displayWidth = frame.displayWidth;
       let displayHeight = frame.displayHeight;
       let yuvLength = displayWidth * displayHeight * 3 / 2;
-      let yuvFrameBuffer = new Uint8Array(yuvLength);
-      let yuvType = frame.format;
-      const options = {
-        format: frame.format,
-        colorSpace: 'display-p3',
-        sourceRect: { x: 0, y: 0, width: displayWidth, height: displayHeight },
-        destinationOffset: { x: 0, y: 0 }
-      }
-      frame.copyTo(yuvFrameBuffer, options).then(() => {
-        console.log("frame copy success yuvLength:" + yuvLength);
-      }).catch(() => {
-        console.log("frame copyTo error");
-      });
-      //get yuv from frame end
-
-
       // Update statistics.
       if (startTime == null) {
         startTime = performance.now();
@@ -100,6 +122,7 @@ function start({ dataUri, rendererName, canvas }) {
     },
     setStatus
   });
+
 }
 
 // Listen for the start request.
